@@ -107,9 +107,15 @@ end
 
 @testset "Random data" begin
     mt = MersenneTwister(1234)
+    # base64encode(::DenseVector{UInt8})
     for _ in 1:1000
         data = rand(mt, UInt8, rand(0:300))
         @test hash(base64decode(base64encode(data))) == hash(data)
+    end
+    # base64encode(args...; context=nothing)
+    for _ in 1:1000
+        data = rand(mt, UInt8, rand(0:300))
+        @test hash(base64decode(base64encode(data; context=nothing))) == hash(data)
     end
 end
 

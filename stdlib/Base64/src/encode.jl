@@ -1,9 +1,14 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
 # Generate encode table.
-const BASE64_ENCODE = [UInt8(x) for x in append!(['A':'Z'; 'a':'z'; '0':'9'], ['+', '/'])]
+const BASE64_ENCODE = UInt8.(['A':'Z'; 'a':'z'; '0':'9'; '+'; '/'])
+# Generate encode table of pairs. This is faster for looking up 4 at a time.
+const BASE64_ENCODE_2 = [UInt8.((a, b)) for a in BASE64_ENCODE for b in BASE64_ENCODE]
 encode(x::UInt8) = @inbounds return BASE64_ENCODE[(x & 0x3f) + 1]
-encodepadding()  = UInt8('=')
+# Given aaaaaabb|bbbbcccc|ccdddddd|xxxxxxxx encodes into (A, B, C, D).
+encode_4(x::UInt32) = @inbounds (
+    BASE64_ENCODE_2[x>>20 + 1]..., BASE64_ENCODE_2[x>>8 & 0x0fff + 1]...)
+encodepadding() = UInt8('=')
 
 """
     Base64EncodePipe(ostream)
@@ -214,3 +219,86 @@ function base64encode(f::Function, args...; context=nothing)
     return String(take!(s))
 end
 base64encode(args...; context=nothing) = base64encode(write, args...; context=context)
+
+# A more efficient implementation of base64encode(::DenseVector; context=nothing)
+function base64encode(input::DenseVector{UInt8})
+    in_len = length(input)
+    out_len = 4cld(in_len, 3)
+    output = Base._string_n(out_len)
+    GC.@preserve input output begin
+        unsafe_base64encode!(pointer(output), pointer(input), out_len, in_len)
+    end
+    return output
+end
+
+"""
+    unsafe_base64encode!(output::Ptr, input::Ptr, out_len, in_len)
+
+Base 64-encode data from `input` and write to `output`.
+
+The unsafe prefix on this function indicates that no validation is performed on the pointers `input` and `output` to ensure that they are valid. Like C, the programmer is responsible for ensuring that referenced memory is not freed or garbage collected while invoking this function. Incorrect usage may segfault your program.
+"""
+function unsafe_base64encode!(output::Ptr{O}, input::Ptr{I}, out_len::Integer, in_len::Integer) where {O, I}
+    op = Ptr{Tuple{UInt8, UInt8, UInt8, UInt8}}(output)
+    ip = Ptr{UInt32}(input)
+    out_ending = op + out_len
+    in_ending = ip + in_len
+    # Unrolling the loop like this gives ~2x speed increase
+    while op + (64+4) < out_ending
+        unsafe_store!(op,    unsafe_load(ip   ) |> hton |> encode_4)
+        unsafe_store!(op+4,  unsafe_load(ip+3 ) |> hton |> encode_4)
+        unsafe_store!(op+8,  unsafe_load(ip+6 ) |> hton |> encode_4)
+        unsafe_store!(op+12, unsafe_load(ip+9 ) |> hton |> encode_4)
+        unsafe_store!(op+16, unsafe_load(ip+12) |> hton |> encode_4)
+        unsafe_store!(op+20, unsafe_load(ip+15) |> hton |> encode_4)
+        unsafe_store!(op+24, unsafe_load(ip+18) |> hton |> encode_4)
+        unsafe_store!(op+28, unsafe_load(ip+21) |> hton |> encode_4)
+        unsafe_store!(op+32, unsafe_load(ip+24) |> hton |> encode_4)
+        unsafe_store!(op+36, unsafe_load(ip+27) |> hton |> encode_4)
+        unsafe_store!(op+40, unsafe_load(ip+30) |> hton |> encode_4)
+        unsafe_store!(op+44, unsafe_load(ip+33) |> hton |> encode_4)
+        unsafe_store!(op+48, unsafe_load(ip+36) |> hton |> encode_4)
+        unsafe_store!(op+52, unsafe_load(ip+39) |> hton |> encode_4)
+        unsafe_store!(op+56, unsafe_load(ip+42) |> hton |> encode_4)
+        unsafe_store!(op+60, unsafe_load(ip+45) |> hton |> encode_4)
+        op += 64
+        ip += 48
+    end
+    while op + 4 < out_ending
+        unsafe_store!(op, unsafe_load(ip) |> hton |> encode_4)
+        op += 4
+        ip += 3
+    end
+
+    # Write last 4 bytes
+    @assert in_ending - 3 <= ip <= in_ending
+    l = in_ending - ip
+    if l == 3
+        b1 = unsafe_load(Ptr{UInt8}(ip))
+        b2 = unsafe_load(Ptr{UInt8}(ip), 2)
+        b3 = unsafe_load(Ptr{UInt8}(ip), 3)
+        unsafe_store!(op, (
+            encode(b1 >> 2          ),
+            encode(b1 << 4 | b2 >> 4),
+            encode(b2 << 2 | b3 >> 6),
+            encode(          b3     )
+        ))
+    elseif l == 2
+        b1 = unsafe_load(Ptr{UInt8}(ip))
+        b2 = unsafe_load(Ptr{UInt8}(ip), 2)
+        unsafe_store!(op, (
+            encode(b1 >> 2          ),
+            encode(b1 << 4 | b2 >> 4),
+            encode(b2 << 2          ),
+            encodepadding()
+        ))
+    elseif l == 1
+        b1 = unsafe_load(Ptr{UInt8}(ip))
+        unsafe_store!(op, (
+            encode(b1 >> 2          ),
+            encode(b1 << 4          ),
+            encodepadding(), encodepadding()
+        ))
+    end
+    return nothing
+end

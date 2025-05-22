@@ -223,28 +223,36 @@ base64encode(args...; context=nothing) = base64encode(write, args...; context=co
 # A more efficient implementation of base64encode(::DenseVector; context=nothing)
 function base64encode(input::DenseVector{UInt8})
     in_len = length(input)
-    out_len = 4cld(in_len, 3)
-    output = Base._string_n(out_len)
+    output = Base._string_n(4cld(in_len, 3))
     GC.@preserve input output begin
-        unsafe_base64encode!(pointer(output), pointer(input), out_len, in_len)
+        unsafe_base64encode!(pointer(output), pointer(input), in_len)
+    end
+    return output
+end
+
+# A more efficient implementation of base64encode(::String; context=nothing)
+function base64encode(input::String)
+    in_len = sizeof(input)
+    output = Base._string_n(4cld(in_len, 3))
+    GC.@preserve input output begin
+        unsafe_base64encode!(pointer(output), pointer(input), in_len)
     end
     return output
 end
 
 """
-    unsafe_base64encode!(output::Ptr, input::Ptr, out_len, in_len)
+    unsafe_base64encode!(output::Ptr, input::Ptr, in_len)
 
-Base 64-encode data from `input` and write to `output`.
+Base 64-encode `in_len` bytes from `input` and write to `output`. Assumes `output` is large enough (at least `4*cld(in_len, 3)`).
 
 The unsafe prefix on this function indicates that no validation is performed on the pointers `input` and `output` to ensure that they are valid. Like C, the programmer is responsible for ensuring that referenced memory is not freed or garbage collected while invoking this function. Incorrect usage may segfault your program.
 """
-function unsafe_base64encode!(output::Ptr{O}, input::Ptr{I}, out_len::Integer, in_len::Integer) where {O, I}
+function unsafe_base64encode!(output::Ptr, input::Ptr, in_len::Integer)
     op = Ptr{Tuple{UInt8, UInt8, UInt8, UInt8}}(output)
     ip = Ptr{UInt32}(input)
-    out_ending = op + out_len
     in_ending = ip + in_len
     # Unrolling the loop like this gives ~2x speed increase
-    while op + (64+4) < out_ending
+    while ip + (48+3) < in_ending
         unsafe_store!(op,    unsafe_load(ip   ) |> hton |> encode_4)
         unsafe_store!(op+4,  unsafe_load(ip+3 ) |> hton |> encode_4)
         unsafe_store!(op+8,  unsafe_load(ip+6 ) |> hton |> encode_4)
@@ -264,7 +272,7 @@ function unsafe_base64encode!(output::Ptr{O}, input::Ptr{I}, out_len::Integer, i
         op += 64
         ip += 48
     end
-    while op + 4 < out_ending
+    while ip + 3 < in_ending
         unsafe_store!(op, unsafe_load(ip) |> hton |> encode_4)
         op += 4
         ip += 3

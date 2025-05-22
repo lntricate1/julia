@@ -66,6 +66,9 @@ const longDecodedText = "name = \"Genie\"\nuuid = \"c43c736e-a2d1-11e8-161f-af95
 
     # Encode to string and decode
     @test String(base64decode(base64encode(inputText))) == inputText
+    # Same thing with the more general methods
+    @test String(invoke(base64decode, Tuple{AbstractString},
+        invoke(base64encode, Tuple{AbstractString}, inputText))) == inputText
 
     # Decode with max line chars = 76 and padding
     ipipe = Base64DecodePipe(IOBuffer(encodedMaxLine76))
@@ -88,34 +91,49 @@ const longDecodedText = "name = \"Genie\"\nuuid = \"c43c736e-a2d1-11e8-161f-af95
 
     # issue #32397
     @test String(base64decode(longEncodedText)) == longDecodedText;
+    @test String(invoke(base64decode, Tuple{AbstractString}, longEncodedText)) == longDecodedText;
 
     # Optional padding
     @test base64decode("AQ==") == base64decode("AQ")
     @test base64decode("zzzzAQ==") == base64decode("zzzzAQ")
     @test base64decode("AQI=") == base64decode("AQI")
+    @test invoke(base64decode, Tuple{AbstractString}, "AQ==") == base64decode("AQ")
+    @test invoke(base64decode, Tuple{AbstractString}, "zzzzAQ==") == base64decode("zzzzAQ")
+    @test invoke(base64decode, Tuple{AbstractString}, "AQI=") == base64decode("AQI")
 
     # Too short, 6 bits do not cover a full byte.
     @test_throws ArgumentError base64decode("a")
     @test_throws ArgumentError base64decode("a===")
     @test_throws ArgumentError base64decode("ZZZZa")
     @test_throws ArgumentError base64decode("ZZZZa===")
+    @test_throws ArgumentError invoke(base64decode, Tuple{AbstractString}, "a")
+    @test_throws ArgumentError invoke(base64decode, Tuple{AbstractString}, "a===")
+    @test_throws ArgumentError invoke(base64decode, Tuple{AbstractString}, "ZZZZa")
+    @test_throws ArgumentError invoke(base64decode, Tuple{AbstractString}, "ZZZZa===")
 
     # Bit padding should be ignored, which means that `jl` and `jk` should give the same result.
     @test base64decode("jl") == base64decode("jk") == base64decode("jk==") == [142]
     @test base64decode("Aa") == base64decode("AS") == base64decode("AS==") == [1]
+    @test invoke(base64decode, Tuple{AbstractString}, "jl") ==
+        invoke(base64decode, Tuple{AbstractString}, "jk") ==
+        invoke(base64decode, Tuple{AbstractString}, "jk==") == [142]
+    @test invoke(base64decode, Tuple{AbstractString}, "Aa") ==
+        invoke(base64decode, Tuple{AbstractString}, "AS") ==
+        invoke(base64decode, Tuple{AbstractString}, "AS==") == [1]
 end
 
 @testset "Random data" begin
     mt = MersenneTwister(1234)
-    # base64encode(::DenseVector{UInt8})
+    # base64encode(::DenseVector{UInt8}), base64decode(::String)
     for _ in 1:1000
         data = rand(mt, UInt8, rand(0:300))
         @test hash(base64decode(base64encode(data))) == hash(data)
     end
-    # base64encode(args...; context=nothing)
+    # base64encode(args...; context=nothing), base64decode(::AbstractString)
     for _ in 1:1000
         data = rand(mt, UInt8, rand(0:300))
-        @test hash(base64decode(base64encode(data; context=nothing))) == hash(data)
+        @test hash(invoke(base64decode, Tuple{AbstractString},
+            base64encode(data; context=nothing))) == hash(data)
     end
 end
 
@@ -147,6 +165,8 @@ end
 @testset "lstrsplaced" begin
     for _ in 1:1000
         @test String(base64decode(splace(longEncodedText))) == longDecodedText
+        @test String(invoke(base64decode, Tuple{AbstractString},
+            splace(longEncodedText))) == longDecodedText
     end
 end
 
